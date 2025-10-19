@@ -1,139 +1,192 @@
-# OpenPayG RPC
+# Falcon-RPC---Fastest-RPC
 
-OpenPayG RPC is a fully open-source, self-hosted alternative to commercial blockchain infrastructure providers. It combines an Erigon execution node, authenticated JSON-RPC proxy, API key management, metered billing simulation, observability, and a web dashboard into a single docker-compose deployment.
+Falcon-RPC---Fastest-RPC is a batteries-included, self-hostable RPC platform that combines an Ethereum Erigon node, authenticated proxying, API key governance, metered billing, observability, and a web dashboard. Spin it up with Docker Compose and you have everything you need to operate production-grade infrastructure without relying on third-party providers.
 
-## Highlights
-- **Archive-grade Erigon node** with expanded `eth_getLogs` and `trace_*` support.
-- **API key & auth service** with JWT-secured admin console, plan management, IP allowlists, and Prometheus metrics.
-- **High-throughput RPC proxy** that enforces per-plan rate limits, block-range ceilings, Prometheus metrics, and per-request usage logging.
-- **Billing engine** that simulates PAYG invoices from usage logs and publishes metrics for Grafana dashboards.
-- **React + Next.js dashboard** for managing keys, monitoring usage, and reviewing billing in real time.
-- **Prometheus + Grafana** stack with prebuilt dashboards for RPC throughput, latency, billing totals, and node health.
-- **One-command install** via `docker compose up -d` with MIT-licensed source.
+## Features at a Glance
+- **High-throughput RPC proxy** with per-plan rate limits, block range enforcement, websocket support, and detailed logging.
+- **API key and identity service** offering JWT-secured admin APIs, plan management, CIDR allowlists, and Prometheus metrics.
+- **Billing engine** that turns usage logs into simulated invoices and real-time revenue gauges.
+- **Next.js dashboard** for issuing keys, tracking usage, and reviewing billing performance.
+- **Observability stack** (Prometheus + Grafana) provisioned with dashboards for latency, throughput, and billing KPIs.
+- **One-command deployment** through `docker compose`, backed by a PostgreSQL schema tuned for usage analytics.
 
-## Quick Start
+## Component Matrix
+| Service | Directory | Default Port(s) | What it does |
+|---------|-----------|-----------------|---------------|
+| `postgres` | `db` | `5432` (mapped from `${POSTGRES_PORT}`) | Stores users, plans, API keys, rate-limit counters, usage logs, billing records, and allowlists. |
+| `auth-service` | `auth-service` | `8080` | Fastify service that handles admin login, API key CRUD, usage aggregation, billing queries, and exposes metrics. |
+| `rpc-proxy` | `rpc-proxy` | `8545` (HTTP), `8546` (WS) | Authenticated JSON-RPC forwarder with rate limiting, block-range ceilings, metrics, and request accounting. |
+| `billing-engine` | `billing-engine` | `8090` | Background worker + Fastify health/metrics endpoints that compute simulated invoices at a configurable cadence. |
+| `dashboard` | `dashboard` | `3000` | Next.js app for operators to manage keys, visualize usage, and inspect billing data. |
+| `erigon` | external image | `8545`, `8546`, `6060` | Execution client providing archive-grade Ethereum data to the proxy and exporting node metrics. |
+| `prometheus` | `prometheus` | `9090` | Scrapes metrics from every service and Erigon. |
+| `grafana` | `grafana` | `3001` | Pre-provisioned dashboards for RPC throughput, latency, billing totals, and node health. |
+
+## Quickstart
+Ensure Docker Compose is available, then:
 
 ```bash
-# clone and configure
-git clone https://github.com/your-org/openpayg-rpc.git
-cd openpayg-rpc
-cp .env.example .env
-
-# launch the full stack
+git clone https://github.com/your-org/falcon-rpc.git
+cd falcon-rpc
+cp .env.example .env  # if you have not created one yet
 docker compose up -d --build
 
-# follow service logs (optional)
+# optional: follow logs
 docker compose logs -f auth-service rpc-proxy billing-engine dashboard
 ```
 
-Default endpoints after startup:
+Default endpoints once the stack is healthy:
 
 | Service | URL |
 |---------|-----|
-| RPC Proxy | `http://localhost:8545` (HTTP) / `ws://localhost:8546` |
+| RPC Proxy (HTTP) | `http://localhost:8545` |
+| RPC Proxy (WebSocket) | `ws://localhost:8546` |
 | Auth API | `http://localhost:8080` |
 | Dashboard | `http://localhost:3000` |
 | Prometheus | `http://localhost:9090` |
 | Grafana | `http://localhost:3001` |
 
-Grafana default credentials: `admin` / `admin` (configurable via `.env`).
+Grafana boots with `admin` / `admin` (configure via `GRAFANA_ADMIN_*`).  
+> **Heads-up:** Erigon syncs mainnet by default and can consume >1.5 TB of disk and many hours on the first run. Swap out the node container if you prefer a lighter backend.
 
-> **Note:** Erigon will initiate a full mainnet sync. The first start can require substantial disk (>= 1.5 TB) and time. You can swap the node backend for Nethermind by editing `docker-compose.yml`.
-
-## First Call Walkthrough
-
-1. Log in to the dashboard (`http://localhost:3000`) using the admin credentials set in `.env` (defaults: `admin@example.com` / `change_me`).
-2. Create a new API key or use the seeded key (`ADMIN_DEFAULT_API_KEY`).
-3. Execute a wide-range query:
+### First Request Walkthrough
+1. Sign in to the dashboard with `ADMIN_EMAIL` / `ADMIN_PASSWORD` from `.env`.
+2. Create a new API key or reuse the seeded `ADMIN_DEFAULT_API_KEY`.
+3. Call the proxy:
 
 ```bash
 curl -X POST http://localhost:8545 \
   -H 'Content-Type: application/json' \
   -H 'x-api-key: local-admin-key' \
-  -d '{"jsonrpc":"2.0","id":1,"method":"eth_getLogs","params":[{"fromBlock":"0x1330000","toBlock":"0x133ffff"}]}'
+  -d '{"jsonrpc":"2.0","id":1,"method":"eth_blockNumber","params":[]}'
 ```
 
-4. Open the dashboard and Prometheus/Grafana to see usage, rate-limit metrics, and simulated billing update within seconds.
+4. Inspect live metrics in Grafana and usage charts on the dashboard to verify the request was recorded.
 
-## Service Topology
-
+## Architecture
 ```
-User/DApp --> RPC Proxy (Fastify) --> Erigon Node
-                     |-> PostgreSQL (usage, billing, allowlists)
-                     |-> Prometheus metrics exporter
-Auth Service <------/ 
-Dashboard (Next.js) -> Auth/Billing APIs
-Billing Engine -----> PostgreSQL & Prometheus
-Prometheus ---------> Grafana Dashboards
+                          ┌──────────────────────┐
+                          │    Dashboard (Next)  │
+                          └──────────┬───────────┘
+                                     │
+┌──────────────┐         ┌───────────▼───────────┐        ┌──────────────┐
+│  User / dApp │  RPC    │    RPC Proxy (Fastify) ├───────►│   Erigon     │
+└───────┬──────┘  calls  └───────────┬───────────┘        └──────────────┘
+        │                            │
+        │                            │ writes usage / queries plans
+        │                            ▼
+        │                ┌──────────────────────┐
+        │                │   PostgreSQL (DB)    │
+        │                └──────────┬───────────┘
+        │                            │
+        │          ┌────────────────▼─────────────┐
+        │          │   Auth Service (Fastify)     │
+        │          └──────────┬───────────┬───────┘
+        │                     │           │
+        │                     │           │ billing summaries
+        │                     │           ▼
+        │                     │   ┌───────────────┐
+        │                     └──►│ Billing Engine│
+        │                         └───────────────┘
+        │
+        ▼
+┌──────────────────┐        ┌───────────────────┐
+│ Prometheus (9090)│◄───────┤ Metrics exporters │
+└──────────────────┘        └───────────────────┘
+          │
+          ▼
+┌──────────────────┐
+│ Grafana (3001)   │
+└──────────────────┘
 ```
 
-## Plans & Limits
+## Configuration Reference
+All services read environment variables from `.env`. Key settings:
 
-| Plan | Block Range | Rate Limit | Monthly Quota | Price / 1k |
-|------|-------------|------------|---------------|------------|
-| Free | 10 blocks | 10 req/min | 5k calls | $0.00 |
-| Dev | 1,000 blocks | 100 req/min | 50k calls | $0.01 |
-| Pro | 1,000,000 blocks | 500 req/min | Unlimited | $0.005 |
+| Section | Variables | Notes |
+|---------|-----------|-------|
+| PostgreSQL | `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `POSTGRES_PORT`, `POSTGRES_HOST` | Credentials used by every service; defaults target the bundled TimescaleDB image. |
+| Auth Service | `AUTH_SERVICE_PORT`, `AUTH_JWT_SECRET`, `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `ADMIN_DEFAULT_PLAN`, `ADMIN_DEFAULT_API_KEY` | Set a strong JWT secret and rotate seeded admin credentials before production. |
+| RPC Proxy | `RPC_PROXY_PORT`, `RPC_PROXY_WS_PORT`, `RPC_PROXY_TARGET`, `RPC_PROXY_WS_TARGET`, `RPC_PROXY_RATE_LIMIT_WINDOW`, `RPC_PROXY_MAX_CONCURRENCY`, `RPC_PROXY_MAX_BLOCK_RANGE_*` | Target URLs point to Erigon by default; block range ceilings are enforced per plan. |
+| Billing | `BILLING_ENGINE_PORT`, `BILLING_CRON_INTERVAL_SECONDS` | Controls Fastify port and how often invoices are recomputed. |
+| Dashboard | `DASHBOARD_PORT`, `NEXT_PUBLIC_*` | Public endpoints used by the Next.js app; adjust if accessing from outside Docker. |
+| Grafana | `GRAFANA_ADMIN_USER`, `GRAFANA_ADMIN_PASSWORD` | Overrides the default credentials. |
 
-Plan characteristics (rate limit, block range, quota, price) live in `plans` table and can be customized.
+Customize rate limits, plan quotas, and pricing through database migrations or by updating seed data in `db/migrations/001_init.sql`.
 
-## Monitoring & Dashboards
+## API Surface
+The REST and JSON-RPC interfaces are documented in [`API_DOCS.md`](API_DOCS.md). Highlights:
+- **Auth Service (`:8080`)**: admin login, plan listing, API key CRUD, usage analytics, billing records, allowlist management, health checks, and metrics.
+- **RPC Proxy (`:8545`/`:8546`)**: authenticated HTTP and WebSocket forwarding with `x-api-key` headers, batch support, block range validation, metrics, and health probes.
+- **Billing Engine (`:8090`)**: exposes `/metrics` and `/health`; all billing reports are accessed via the auth service.
 
-- Prometheus scrapes metrics from `auth-service`, `rpc-proxy`, `billing-engine`, and Erigon.
-- Grafana is auto-provisioned with an overview board (`grafana/dashboards/openpayg-overview.json`).
-- Additional dashboards can be added by dropping JSON into `grafana/dashboards` and restarting Grafana.
+## Observability
+- Prometheus is preconfigured (`prometheus/prometheus.yml`) to scrape the auth service, RPC proxy, billing engine, and Erigon every 15 seconds.
+- Grafana auto-loads dashboards from `grafana/dashboards/openpayg-overview.json`. Add more by dropping JSON into that directory and restarting the container.
+- Notable metrics include:
+  - `rpc_proxy_requests_total{method,plan,status}` for throughput.
+  - `rpc_proxy_request_duration_ms_bucket` for latency distributions.
+  - `auth_service_api_keys_total` for active keys.
+  - `billing_engine_outstanding_amount{currency}` for simulated revenue.
 
-### Key Prometheus Metrics
-- `rpc_proxy_requests_total{method,plan,status}` – per-plan RPC throughput.
-- `rpc_proxy_request_duration_ms_bucket` – request latency histogram.
-- `auth_service_api_keys_total` – total keys issued.
-- `billing_engine_outstanding_amount` – simulated revenue for the current month.
+## Database Schema
+The initial migration (`db/migrations/001_init.sql`) creates:
+- `users`: admin accounts with bcrypt-hashed passwords.
+- `plans`: configurable rate limits, quotas, and pricing.
+- `api_keys`: hashed API key secrets plus optional overrides and allowlists.
+- `usage_logs`: per-request aggregates for billing and observability.
+- `billing_records`: monthly invoice snapshots with overage calculations.
+- `rate_limit_counters`: sliding-window counters used by the proxy.
+- `ip_allow_list`: CIDR restrictions per API key.
+- `node_metrics`: latency samples for Grafana charts.
 
-## Development
+Run migrations automatically with Docker (mounted into Postgres) or manually with your preferred migration tool.
+
+## Local Development
+Install dependencies once per service, then run the dev command you need:
 
 ```bash
-# auth service
+# Auth service
 cd auth-service
 npm install
 npm run dev
 
-# rpc proxy
+# RPC proxy
 cd ../rpc-proxy
 npm install
 npm run dev
 
-# billing engine
+# Billing engine
 cd ../billing-engine
 npm install
 npm run dev
 
-# dashboard (Next.js)
+# Dashboard
 cd ../dashboard
 npm install
 npm run dev
 ```
 
-Use the same `.env` file for local runs; each service reads it via `dotenv`.
+All TypeScript projects share Node 18 settings and rely on the same `.env`. Point them at your local Postgres or reuse the Docker database.
 
 ## Testing & Linting
-
-Each service ships with light unit coverage via Vitest:
+Each backend service uses Vitest and ESLint:
 
 ```bash
-cd auth-service && npm run test && cd ..
-cd rpc-proxy && npm run test && cd ..
-cd billing-engine && npm run test && cd ..
+cd auth-service && npm run test && npm run lint
+cd rpc-proxy && npm run test && npm run lint
+cd billing-engine && npm run test && npm run lint
+cd dashboard && npm run lint
 ```
 
-CI (`.github/workflows/ci.yml`) installs dependencies, compiles TypeScript, executes unit tests, and builds all Docker images.
+For end-to-end validation, stand up the Docker stack and exercise the APIs using the supplied documentation or dashboards.
 
-## Security Notes
-- API keys are hashed with bcrypt and stored in PostgreSQL (`pgcrypto` required).
-- All RPC calls must include `x-api-key`; missing/invalid keys receive HTTP 401.
-- Optional IP allowlists per key restrict access to trusted networks.
-- JWT-protected admin API; rotate `AUTH_JWT_SECRET` and admin credentials before production use.
-- The default admin key is seeded for convenience—change it immediately in real deployments.
+## Security Checklist
+- Change `AUTH_JWT_SECRET`, admin credentials, and the seeded API key before exposing the stack publicly.
+- Restrict API access with per-key CIDR allowlists and rotate keys regularly.
+- Monitor `rpc_proxy_requests_total` and `rate_limit_counters` to detect abuse.
+- Run Grafana behind authentication or VPN if you deploy outside of localhost.
+- Consider swapping the default PostgreSQL password and enabling TLS when running in production.
 
 ## License
-
-MIT License — see [LICENSE](./LICENSE).
+Falcon-RPC---Fastest-RPC is released under the [MIT License](LICENSE).
