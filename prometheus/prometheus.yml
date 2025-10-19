@@ -1,0 +1,27 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  - job_name: 'auth-service'
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['auth-service:8080']
+
+  - job_name: 'rpc-proxy'
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['rpc-proxy:8545']
+
+  - job_name: 'billing-engine'
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['billing-engine:8090']
+
+  - job_name: 'erigon'
+    metrics_path: /debug/metrics/prometheus
+    static_configs:
+      - targets: ['erigon:6060']

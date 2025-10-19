@@ -1,0 +1,12 @@
+# Node modules and build artifacts
+node_modules/
+dist/
+build/
+.next/
+coverage/
+.env
+.env.*
+.DS_Store
+logs/
+.vscode/
+.idea/

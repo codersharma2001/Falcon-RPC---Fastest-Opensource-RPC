@@ -1,0 +1,123 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: timescale/timescaledb:2.14.2-pg15
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-openpayg}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-openpayg}
+      POSTGRES_DB: ${POSTGRES_DB:-openpayg}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./db/migrations:/docker-entrypoint-initdb.d
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-openpayg}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  auth-service:
+    build: ./auth-service
+    depends_on:
+      - postgres
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-openpayg}:${POSTGRES_PASSWORD:-openpayg}@postgres:5432/${POSTGRES_DB:-openpayg}
+      AUTH_SERVICE_PORT: ${AUTH_SERVICE_PORT:-8080}
+      AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:-supersecretjwt}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@example.com}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-change_me}
+      ADMIN_DEFAULT_PLAN: ${ADMIN_DEFAULT_PLAN:-pro}
+      ADMIN_DEFAULT_API_KEY: ${ADMIN_DEFAULT_API_KEY:-local-admin-key}
+    ports:
+      - "${AUTH_SERVICE_PORT:-8080}:8080"
+
+  rpc-proxy:
+    build: ./rpc-proxy
+    depends_on:
+      - auth-service
+      - postgres
+      - erigon
+    environment:
+      RPC_PROXY_PORT: ${RPC_PROXY_PORT:-8545}
+      RPC_PROXY_WS_PORT: ${RPC_PROXY_WS_PORT:-8546}
+      RPC_PROXY_TARGET: ${RPC_PROXY_TARGET:-http://erigon:8545}
+      RPC_PROXY_WS_TARGET: ${RPC_PROXY_WS_TARGET:-ws://erigon:8546}
+      DATABASE_URL: postgres://${POSTGRES_USER:-openpayg}:${POSTGRES_PASSWORD:-openpayg}@postgres:5432/${POSTGRES_DB:-openpayg}
+      AUTH_SERVICE_URL: http://auth-service:8080
+    ports:
+      - "${RPC_PROXY_PORT:-8545}:8545"
+      - "${RPC_PROXY_WS_PORT:-8546}:8546"
+
+  billing-engine:
+    build: ./billing-engine
+    depends_on:
+      - postgres
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-openpayg}:${POSTGRES_PASSWORD:-openpayg}@postgres:5432/${POSTGRES_DB:-openpayg}
+      BILLING_CRON_INTERVAL_SECONDS: ${BILLING_CRON_INTERVAL_SECONDS:-60}
+    ports:
+      - "${BILLING_ENGINE_PORT:-8090}:8090"
+
+  dashboard:
+    build: ./dashboard
+    depends_on:
+      - auth-service
+      - rpc-proxy
+    environment:
+      NEXT_PUBLIC_AUTH_API: ${NEXT_PUBLIC_AUTH_API:-http://auth-service:8080}
+      NEXT_PUBLIC_METRICS_API: ${NEXT_PUBLIC_METRICS_API:-http://auth-service:8080}
+      NEXT_PUBLIC_BILLING_API: ${NEXT_PUBLIC_BILLING_API:-http://auth-service:8080}
+      DASHBOARD_PORT: ${DASHBOARD_PORT:-3000}
+    ports:
+      - "${DASHBOARD_PORT:-3000}:3000"
+
+  prometheus:
+    image: prom/prometheus:v2.49.1
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana:10.4.1
+    depends_on:
+      - prometheus
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      - ./grafana/dashboards:/var/lib/grafana/dashboards
+    ports:
+      - "3001:3000"
+
+  erigon:
+    image: erigontech/erigon:latest
+    command:
+      - '--chain=mainnet'
+      - '--torrent.port=42069'
+      - '--metrics'
+      - '--metrics.addr=0.0.0.0'
+      - '--metrics.port=6060'
+      - '--rpc.batch.limit=200'
+      - '--http'
+      - '--http.addr=0.0.0.0'
+      - '--http.port=8545'
+      - '--http.api=eth,debug,net,trace,web3'
+      - '--http.vhosts=*'
+      - '--http.corsdomain=*'
+      - '--ws'
+      - '--ws.port=8546'
+    ports:
+      - "8547:8545"
+      - "8548:8546"
+    volumes:
+      - erigon-data:/var/lib/erigon
+
+volumes:
+  postgres-data:
+  erigon-data:
