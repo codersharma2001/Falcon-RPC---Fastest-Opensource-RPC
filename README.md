@@ -121,6 +121,12 @@ All services read environment variables from `.env`. Key settings:
 
 Customize rate limits, plan quotas, and pricing through database migrations or by updating seed data in `db/migrations/001_init.sql`.
 
+### Consensus Client Notes
+- Lighthouse runs on the stable `v7.x` series by default and boots from a finalized checkpoint (`LIGHTHOUSE_CHECKPOINT_URL`). The first snapshot download is only a few hundred megabytes, but long-term consensus data will grow into the tens of gigabytes.
+- Erigon remains an archive execution client; expect 1.5–2 TB of storage consumption over time. If you do not have sufficient disk, point `RPC_PROXY_TARGET` / `RPC_PROXY_WS_TARGET` at a remote node and remove the `lighthouse`/`erigon` services from `docker-compose.yml`.
+- To change mirrors, edit `LIGHTHOUSE_CHECKPOINT_URL` (see [the community list](https://eth-clients.github.io/checkpoint-sync-endpoints/)). For checkpoint bootstrap from your own CL, replace the URL with your beacon endpoint or supply local SSZ files.
+- When rotating the shared JWT (stored in `config/jwt/engine.jwt`), restart **both** Lighthouse and Erigon so the Engine API handshake succeeds.
+
 ## API Surface
 The REST and JSON-RPC interfaces are documented in [`API_DOCS.md`](API_DOCS.md). Highlights:
 - **Auth Service (`:8080`)**: admin login, plan listing, API key CRUD, usage analytics, billing records, allowlist management, health checks, and metrics.
