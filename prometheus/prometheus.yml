@@ -25,3 +25,8 @@ scrape_configs:
     metrics_path: /debug/metrics/prometheus
     static_configs:
       - targets: ['erigon:6060']
+
+  - job_name: 'lighthouse'
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['lighthouse:5054']

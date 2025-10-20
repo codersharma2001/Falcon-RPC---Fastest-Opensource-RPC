@@ -5,6 +5,7 @@ Falcon-RPC---Fastest-RPC is a batteries-included, self-hostable RPC platform tha
 ## Features at a Glance
 - **High-throughput RPC proxy** with per-plan rate limits, block range enforcement, websocket support, and detailed logging.
 - **API key and identity service** offering JWT-secured admin APIs, plan management, CIDR allowlists, and Prometheus metrics.
+- **Consensus-backed execution** courtesy of Lighthouse, enabling finalized/safe block tags without relying on external providers.
 - **Billing engine** that turns usage logs into simulated invoices and real-time revenue gauges.
 - **Next.js dashboard** for issuing keys, tracking usage, and reviewing billing performance.
 - **Observability stack** (Prometheus + Grafana) provisioned with dashboards for latency, throughput, and billing KPIs.
@@ -19,6 +20,7 @@ Falcon-RPC---Fastest-RPC is a batteries-included, self-hostable RPC platform tha
 | `billing-engine` | `billing-engine` | `8090` | Background worker + Fastify health/metrics endpoints that compute simulated invoices at a configurable cadence. |
 | `dashboard` | `dashboard` | `3000` | Next.js app for operators to manage keys, visualize usage, and inspect billing data. |
 | `erigon` | external image | `8545`, `8546`, `6060` | Execution client providing archive-grade Ethereum data to the proxy and exporting node metrics. |
+| `lighthouse` | external image | `5052`, `5054` | Consensus client feeds finality information to Erigon and exposes REST + metrics interfaces. |
 | `prometheus` | `prometheus` | `9090` | Scrapes metrics from every service and Erigon. |
 | `grafana` | `grafana` | `3001` | Pre-provisioned dashboards for RPC throughput, latency, billing totals, and node health. |
 
@@ -32,7 +34,7 @@ cp .env.example .env  # if you have not created one yet
 docker compose up -d --build
 
 # optional: follow logs
-docker compose logs -f auth-service rpc-proxy billing-engine dashboard
+docker compose logs -f auth-service rpc-proxy billing-engine lighthouse erigon
 ```
 
 Default endpoints once the stack is healthy:
@@ -43,11 +45,15 @@ Default endpoints once the stack is healthy:
 | RPC Proxy (WebSocket) | `ws://localhost:8546` |
 | Auth API | `http://localhost:8080` |
 | Dashboard | `http://localhost:3000` |
+| Lighthouse REST | `http://localhost:5052` |
+| Lighthouse Metrics | `http://localhost:5054/metrics` |
 | Prometheus | `http://localhost:9090` |
 | Grafana | `http://localhost:3001` |
 
 Grafana boots with `admin` / `admin` (configure via `GRAFANA_ADMIN_*`).  
-> **Heads-up:** Erigon syncs mainnet by default and can consume >1.5 TB of disk and many hours on the first run. Swap out the node container if you prefer a lighter backend.
+> **Heads-up:** Erigon + Lighthouse perform a full mainnet sync. Expect significant disk usage (>= 1.5 TB) and time on first boot. You can swap either client for a lighter backend or point at remote RPC/CL endpoints if desired.
+
+The execution/consensus JWT secret lives in `config/jwt/engine.jwt`. Rotate it before production use and keep both containers in sync if you change the path.
 
 ### First Request Walkthrough
 1. Sign in to the dashboard with `ADMIN_EMAIL` / `ADMIN_PASSWORD` from `.env`.
@@ -71,32 +77,32 @@ curl -X POST http://localhost:8545 \
                                      │
 ┌──────────────┐         ┌───────────▼───────────┐        ┌──────────────┐
 │  User / dApp │  RPC    │    RPC Proxy (Fastify) ├───────►│   Erigon     │
-└───────┬──────┘  calls  └───────────┬───────────┘        └──────────────┘
-        │                            │
-        │                            │ writes usage / queries plans
-        │                            ▼
-        │                ┌──────────────────────┐
-        │                │   PostgreSQL (DB)    │
-        │                └──────────┬───────────┘
-        │                            │
-        │          ┌────────────────▼─────────────┐
-        │          │   Auth Service (Fastify)     │
-        │          └──────────┬───────────┬───────┘
-        │                     │           │
-        │                     │           │ billing summaries
-        │                     │           ▼
-        │                     │   ┌───────────────┐
-        │                     └──►│ Billing Engine│
-        │                         └───────────────┘
-        │
-        ▼
-┌──────────────────┐        ┌───────────────────┐
-│ Prometheus (9090)│◄───────┤ Metrics exporters │
-└──────────────────┘        └───────────────────┘
-          │
-          ▼
-┌──────────────────┐
-│ Grafana (3001)   │
+└───────┬──────┘  calls  └───────────┬───────────┘        └──────┬───────┘
+        │                            │                           │
+        │                            │ writes usage / queries    │ engine API / auth RPC
+        │                            ▼                           │
+        │                ┌──────────────────────┐                │
+        │                │   PostgreSQL (DB)    │                │
+        │                └──────────┬───────────┘                │
+        │                            │                           │
+        │          ┌────────────────▼─────────────┐              │
+        │          │   Auth Service (Fastify)     │              │
+        │          └──────────┬───────────┬───────┘              │
+        │                     │           │                      │
+        │                     │           │ billing summaries    │
+        │                     │           ▼                      │
+        │                     │   ┌───────────────┐              │
+        │                     └──►│ Billing Engine│              │
+        │                         └───────────────┘              │
+        │                                                        │
+        ▼                                                        ▼
+┌──────────────────┐        ┌───────────────────┐      ┌──────────────────┐
+│ Prometheus (9090)│◄───────┤ Metrics exporters │      │ Lighthouse (CL)  │
+└──────────────────┘        └───────────────────┘      └──────────┬───────┘
+          │                                               finality │
+          ▼                                                        │ checkpoint sync
+┌──────────────────┐                                              │
+│ Grafana (3001)   │◄─────────────────────────────────────────────┘
 └──────────────────┘
 ```
 
@@ -111,6 +117,7 @@ All services read environment variables from `.env`. Key settings:
 | Billing | `BILLING_ENGINE_PORT`, `BILLING_CRON_INTERVAL_SECONDS` | Controls Fastify port and how often invoices are recomputed. |
 | Dashboard | `DASHBOARD_PORT`, `NEXT_PUBLIC_*` | Public endpoints used by the Next.js app; adjust if accessing from outside Docker. |
 | Grafana | `GRAFANA_ADMIN_USER`, `GRAFANA_ADMIN_PASSWORD` | Overrides the default credentials. |
+| Consensus | `ERIGON_AUTHRPC_PORT`, `LIGHTHOUSE_HTTP_PORT`, `LIGHTHOUSE_METRICS_PORT`, `LIGHTHOUSE_CHECKPOINT_URL`, `LIGHTHOUSE_CHECKPOINT_TIMEOUT` | Defaults target beaconcha.in’s state provider (900 s timeout); swap to another trusted checkpoint or run your own CL if needed. |
 
 Customize rate limits, plan quotas, and pricing through database migrations or by updating seed data in `db/migrations/001_init.sql`.
 
@@ -122,6 +129,7 @@ The REST and JSON-RPC interfaces are documented in [`API_DOCS.md`](API_DOCS.md).
 
 ## Observability
 - Prometheus is preconfigured (`prometheus/prometheus.yml`) to scrape the auth service, RPC proxy, billing engine, and Erigon every 15 seconds.
+- Lighthouse metrics are scraped on port 5054; Grafana includes panels for consensus progress and finalized epochs.
 - Grafana auto-loads dashboards from `grafana/dashboards/openpayg-overview.json`. Add more by dropping JSON into that directory and restarting the container.
 - Notable metrics include:
   - `rpc_proxy_requests_total{method,plan,status}` for throughput.
@@ -183,6 +191,7 @@ For end-to-end validation, stand up the Docker stack and exercise the APIs using
 
 ## Security Checklist
 - Change `AUTH_JWT_SECRET`, admin credentials, and the seeded API key before exposing the stack publicly.
+- Rotate the shared JWT secret in `config/jwt/engine.jwt` and restart both Erigon and Lighthouse so unauthorized clients cannot bridge the execution/consensus channels.
 - Restrict API access with per-key CIDR allowlists and rotate keys regularly.
 - Monitor `rpc_proxy_requests_total` and `rate_limit_counters` to detect abuse.
 - Run Grafana behind authentication or VPN if you deploy outside of localhost.

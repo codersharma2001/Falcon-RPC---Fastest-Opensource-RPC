@@ -47,6 +47,7 @@ export function ApiKeyManager({ token }: Props) {
   const [newPlan, setNewPlan] = useState('dev');
   const [newName, setNewName] = useState('');
   const [newKeySecret, setNewKeySecret] = useState<string | null>(null);
+  const [selectedKeySecret, setSelectedKeySecret] = useState<string | null>(null);
   const [dailyUsage, setDailyUsage] = useState<UsagePoint[]>([]);
   const [topMethods, setTopMethods] = useState<TopMethod[]>([]);
   const [billing, setBilling] = useState<BillingRecord[]>([]);
@@ -94,16 +95,19 @@ export function ApiKeyManager({ token }: Props) {
 
   const refreshDetails = async (apiKeyId: string) => {
     try {
-      const [usageRes, methodRes, billingRes, allowListRes] = await Promise.all([
+      setSelectedKeySecret(null);
+      const [usageRes, methodRes, billingRes, allowListRes, secretRes] = await Promise.all([
         apiFetch<{ data: UsagePoint[] }>(`/api/usage/${apiKeyId}/daily`, token),
         apiFetch<{ data: TopMethod[] }>(`/api/usage/${apiKeyId}/top-methods`, token),
         apiFetch<{ data: BillingRecord[] }>(`/api/billing/${apiKeyId}`, token),
-        apiFetch<{ entries: AllowListEntry[] }>(`/api/keys/${apiKeyId}/allowlist`, token)
+        apiFetch<{ entries: AllowListEntry[] }>(`/api/keys/${apiKeyId}/allowlist`, token),
+        apiFetch<{ id: string; apiKey: string | null }>(`/api/keys/${apiKeyId}/secret`, token)
       ]);
       setDailyUsage(usageRes.data);
       setTopMethods(methodRes.data);
       setBilling(billingRes.data);
       setAllowList(allowListRes.entries);
+      setSelectedKeySecret(secretRes.apiKey ?? null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load metrics');
     }
@@ -269,7 +273,19 @@ export function ApiKeyManager({ token }: Props) {
       </div>
 
       {selectedKey && (
-        <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+        <>
+          <div className="card">
+            <h3 className="text-lg font-semibold mb-2">API Key Secret</h3>
+            {selectedKeySecret ? (
+              <code className="block bg-slate-900/70 border border-slate-700 rounded px-3 py-2 break-all text-sm">
+                {selectedKeySecret}
+              </code>
+            ) : (
+              <p className="text-sm text-slate-500">Secret unavailable for this key.</p>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
           <div className="card xl:col-span-2 space-y-4">
             <div className="flex items-center justify-between">
               <div>
@@ -333,6 +349,7 @@ export function ApiKeyManager({ token }: Props) {
             </div>
           </div>
         </div>
+        </>
       )}
 
       <div className="card">

@@ -7,6 +7,7 @@ export interface ApiKey {
   name: string | null;
   plan: string;
   api_key_hash: string;
+  api_key_plaintext: string | null;
   rate_limit_override: number | null;
   block_range_override: number | null;
   revoked_at: Date | null;
@@ -19,12 +20,13 @@ export async function createApiKey(client: PoolClient, params: {
   name?: string | null;
   plan: string;
   apiKeyHash: string;
+  apiKeyPlaintext: string | null;
   rateLimitOverride?: number | null;
   blockRangeOverride?: number | null;
 }): Promise<ApiKey> {
   const { rows } = await client.query<ApiKey>(
-    `INSERT INTO api_keys (user_id, name, plan, api_key_hash, rate_limit_override, block_range_override)
-     VALUES ($1, $2, $3, $4, $5, $6)
+    `INSERT INTO api_keys (user_id, name, plan, api_key_hash, rate_limit_override, block_range_override, api_key_plaintext)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
      RETURNING *`,
     [
       params.userId ?? null,
@@ -32,7 +34,8 @@ export async function createApiKey(client: PoolClient, params: {
       params.plan,
       params.apiKeyHash,
       params.rateLimitOverride ?? null,
-      params.blockRangeOverride ?? null
+      params.blockRangeOverride ?? null,
+      params.apiKeyPlaintext
     ]
   );
   return rows[0];

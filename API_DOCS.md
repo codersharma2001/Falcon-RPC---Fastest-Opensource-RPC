@@ -23,6 +23,9 @@ Return all available billing plans. Requires `Authorization: Bearer <token>`.
 ### GET `/api/keys`
 List API keys (admin only). Response includes metadata but never the plain secret.
 
+### GET `/api/keys/:id/secret`
+Fetch the stored plaintext secret for a specific key (admin only). Returns `null` if the secret is unavailable.
+
 ### POST `/api/keys`
 Create a new API key.
 

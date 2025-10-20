@@ -3,7 +3,7 @@ import { z } from 'zod';
 import ipaddr from 'ipaddr.js';
 import { env } from '../env';
 import { pool, withTransaction } from '../db';
-import { createApiKey, listApiKeys, revokeApiKey, usageForKey } from '../repositories/apiKeyRepository';
+import { createApiKey, listApiKeys, revokeApiKey, usageForKey, findApiKeyById } from '../repositories/apiKeyRepository';
 import { generateApiKey, hashSecret } from '../security';
 import { listPlans } from '../repositories/planRepository';
 import { apiKeyCounter, updateActiveApiKeys, register } from '../metrics';
@@ -83,6 +83,7 @@ export async function apiKeyRoutes(fastify: FastifyInstance): Promise<void> {
         plan: data.plan,
         name: data.name,
         apiKeyHash: keyHash,
+        apiKeyPlaintext: rawKey,
         rateLimitOverride: data.rateLimitOverride,
         blockRangeOverride: data.blockRangeOverride
       });
@@ -101,6 +102,27 @@ export async function apiKeyRoutes(fastify: FastifyInstance): Promise<void> {
       plan: record.plan,
       name: record.name,
       createdAt: record.created_at
+    });
+  });
+
+  fastify.get('/api/keys/:id/secret', { preHandler: ensureAuthenticated }, async (request, reply) => {
+    if (!ensureAdmin(request, reply)) return;
+
+    const paramsSchema = z.object({ id: z.string().uuid() });
+    const parsed = paramsSchema.safeParse(request.params);
+    if (!parsed.success) {
+      return reply.status(400).send({ error: 'Invalid key id' });
+    }
+
+    const key = await findApiKeyById(parsed.data.id);
+    if (!key) {
+      return reply.status(404).send({ error: 'Key not found' });
+    }
+
+    return reply.send({
+      id: key.id,
+      name: key.name,
+      apiKey: key.api_key_plaintext
     });
   });
 
