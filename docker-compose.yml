@@ -94,7 +94,7 @@ services:
       - "3001:3000"
 
   lighthouse:
-    image: sigp/lighthouse:v7.1.0
+    image: sigp/lighthouse:${LIGHTHOUSE_TAG:-v7.1.0}
     depends_on:
       - erigon
     entrypoint:
@@ -112,6 +112,11 @@ services:
       - '--metrics'
       - '--metrics-address=0.0.0.0'
       - '--metrics-port=${LIGHTHOUSE_METRICS_PORT:-5054}'
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:${LIGHTHOUSE_HTTP_PORT:-5052}/eth/v1/node/syncing | grep -q '\"is_syncing\": false'"]
+      interval: 30s
+      timeout: 5s
+      retries: 20
     restart: unless-stopped
     ports:
       - "${LIGHTHOUSE_HTTP_PORT:-5052}:5052"
@@ -121,7 +126,7 @@ services:
       - ./config/jwt/engine.jwt:/jwt/jwt.hex:ro
 
   erigon:
-    image: erigontech/erigon:latest
+    image: erigontech/erigon:${ERIGON_TAG:-v3.1.0}
     command:
       - '--chain=mainnet'
       - '--torrent.port=42069'
@@ -132,7 +137,7 @@ services:
       - '--http'
       - '--http.addr=0.0.0.0'
       - '--http.port=8545'
-      - '--http.api=eth,debug,net,trace,web3'
+      - '--http.api=eth,net,web3,erigon'
       - '--http.vhosts=*'
       - '--http.corsdomain=*'
       - '--ws'
@@ -142,12 +147,15 @@ services:
       - '--authrpc.vhosts=*'
       - '--authrpc.jwtsecret=/jwt/jwt.hex'
       - '--beacon.api=http://lighthouse:${LIGHTHOUSE_HTTP_PORT:-5052}'
+      - '--prune.mode=htc'
     ports:
       - "8547:8545"
       - "8548:8546"
+      - "${ERIGON_AUTHRPC_PORT:-8551}:${ERIGON_AUTHRPC_PORT:-8551}"
     volumes:
       - erigon-data:/var/lib/erigon
       - ./config/jwt/engine.jwt:/jwt/jwt.hex:ro
+    restart: unless-stopped
 
 volumes:
   postgres-data:

@@ -113,7 +113,7 @@ All services read environment variables from `.env`. Key settings:
 |---------|-----------|-------|
 | PostgreSQL | `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `POSTGRES_PORT`, `POSTGRES_HOST` | Credentials used by every service; defaults target the bundled TimescaleDB image. |
 | Auth Service | `AUTH_SERVICE_PORT`, `AUTH_JWT_SECRET`, `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `ADMIN_DEFAULT_PLAN`, `ADMIN_DEFAULT_API_KEY` | Set a strong JWT secret and rotate seeded admin credentials before production. |
-| RPC Proxy | `RPC_PROXY_PORT`, `RPC_PROXY_WS_PORT`, `RPC_PROXY_TARGET`, `RPC_PROXY_WS_TARGET`, `RPC_PROXY_RATE_LIMIT_WINDOW`, `RPC_PROXY_MAX_CONCURRENCY`, `RPC_PROXY_MAX_BLOCK_RANGE_*` | Target URLs point to Erigon by default; block range ceilings are enforced per plan. |
+| RPC Proxy | `RPC_PROXY_PORT`, `RPC_PROXY_WS_PORT`, `RPC_PROXY_TARGET`, `RPC_PROXY_WS_TARGET`, `RPC_PROXY_RATE_LIMIT_WINDOW`, `RPC_PROXY_MAX_CONCURRENCY`, `RPC_PROXY_MAX_BLOCK_RANGE_*`, `CL_HEALTH_ENDPOINT`, `FALLBACK_RPC_LIST`, `FALLBACK_ON_FINALITY` | Proxy checks Lighthouse health before serving finalized/safe tags and can route traces or degraded finality calls to upstream fallbacks. |
 | Billing | `BILLING_ENGINE_PORT`, `BILLING_CRON_INTERVAL_SECONDS` | Controls Fastify port and how often invoices are recomputed. |
 | Dashboard | `DASHBOARD_PORT`, `NEXT_PUBLIC_*` | Public endpoints used by the Next.js app; adjust if accessing from outside Docker. |
 | Grafana | `GRAFANA_ADMIN_USER`, `GRAFANA_ADMIN_PASSWORD` | Overrides the default credentials. |
@@ -125,7 +125,20 @@ Customize rate limits, plan quotas, and pricing through database migrations or b
 - Lighthouse runs on the stable `v7.x` series by default and boots from a finalized checkpoint (`LIGHTHOUSE_CHECKPOINT_URL`). The first snapshot download is only a few hundred megabytes, but long-term consensus data will grow into the tens of gigabytes.
 - Erigon remains an archive execution client; expect 1.5–2 TB of storage consumption over time. If you do not have sufficient disk, point `RPC_PROXY_TARGET` / `RPC_PROXY_WS_TARGET` at a remote node and remove the `lighthouse`/`erigon` services from `docker-compose.yml`.
 - To change mirrors, edit `LIGHTHOUSE_CHECKPOINT_URL` (see [the community list](https://eth-clients.github.io/checkpoint-sync-endpoints/)). For checkpoint bootstrap from your own CL, replace the URL with your beacon endpoint or supply local SSZ files.
+- Override container versions with `ERIGON_TAG` / `LIGHTHOUSE_TAG` if you need to pin to a different release.
 - When rotating the shared JWT (stored in `config/jwt/engine.jwt`), restart **both** Lighthouse and Erigon so the Engine API handshake succeeds.
+
+### RPC Proxy Fallbacks
+- Populate `FALLBACK_RPC_LIST` with one or more upstream HTTPS JSON-RPC endpoints (comma-separated). Trace-heavy methods are automatically routed to the fallback list, since the bundled Erigon runs in pruned mode by default.
+- The proxy polls Lighthouse via `CL_HEALTH_ENDPOINT` before serving `finalized`/`safe`. When Lighthouse reports `is_syncing: true`, the proxy either returns HTTP 503 (default) or uses the fallback list if `FALLBACK_ON_FINALITY=true`.
+- Batch requests inherit the strictest routing rule among their methods (e.g., a single `trace_*` call sends the whole batch to the fallback).
+
+### Open RPC Mode (Large Block Ranges)
+- Enable with `OPENRPC_ENABLE=true` to accept wide `eth_getLogs` ranges while chunking requests internally so upstreams never see oversized windows.
+- User-facing limits: `OPENRPC_MAX_USER_BLOCK_RANGE` caps the allowed span; requests above it are rejected.
+- Upstream safety: `UPSTREAM_MAX_LOG_RANGE` controls chunk size sent to upstreams, with `UPSTREAM_MAX_PARALLEL` concurrency and `UPSTREAM_TIMEOUT_MS` timeouts; rate-limit responses trigger small retries/backoff across `FALLBACK_RPC_LIST`.
+- Memory safety: aggregated logs are capped by `OPENRPC_MAX_LOGS_IN_MEMORY`; if exceeded, the proxy returns an error asking for narrower filters. `blockHash` filters are forwarded untouched (no chunking).
+- Clients still need to respect upstream throughput caps; chunking avoids hard failures but does not provide infinite QPS.
 
 ## API Surface
 The REST and JSON-RPC interfaces are documented in [`API_DOCS.md`](API_DOCS.md). Highlights:

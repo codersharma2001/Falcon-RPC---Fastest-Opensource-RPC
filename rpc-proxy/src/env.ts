@@ -11,8 +11,24 @@ const envSchema = z.object({
   DATABASE_URL: z.string().url(),
   LOG_LEVEL: z.string().default('info'),
   RPC_PROXY_RATE_LIMIT_WINDOW: z.coerce.number().default(60_000),
-  RPC_PROXY_MAX_CONCURRENCY: z.coerce.number().default(200)
-});
+  RPC_PROXY_MAX_CONCURRENCY: z.coerce.number().default(200),
+  CL_HEALTH_ENDPOINT: z.string().url().default('http://lighthouse:5052/eth/v1/node/syncing'),
+  FALLBACK_RPC_LIST: z.string().default(''),
+  FALLBACK_ON_FINALITY: z.string().default('false'),
+  OPENRPC_ENABLE: z.string().default('false'),
+  OPENRPC_MAX_USER_BLOCK_RANGE: z.coerce.number().default(1_000_000),
+  UPSTREAM_MAX_LOG_RANGE: z.coerce.number().default(5_000),
+  UPSTREAM_MAX_PARALLEL: z.coerce.number().default(3),
+  UPSTREAM_TIMEOUT_MS: z.coerce.number().default(25_000),
+  OPENRPC_MAX_LOGS_IN_MEMORY: z.coerce.number().default(50_000)
+}).transform(data => ({
+  ...data,
+  FALLBACK_RPC_ENDPOINTS: data.FALLBACK_RPC_LIST.split(',')
+    .map(item => item.trim())
+    .filter(item => item.length > 0),
+  FALLBACK_ON_FINALITY: data.FALLBACK_ON_FINALITY.toLowerCase() === 'true',
+  OPENRPC_ENABLE: data.OPENRPC_ENABLE.toLowerCase() === 'true'
+}));
 
 const parsed = envSchema.safeParse(process.env);
 
